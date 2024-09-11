@@ -1,0 +1,377 @@
+#include <LiquidCrystal.h>
+#include <EEPROM.h> // To store the settings in non-volatile memory
+
+// Pin definitions for LCD
+const int LCD_RS = 8;
+const int LCD_ENABLE = 9;
+const int LCD_D4 = 4;
+const int LCD_D5 = 5;
+const int LCD_D6 = 6;
+const int LCD_D7 = 7;
+const int BACKLIGHT = 10;
+const int BUTTON_PIN = A0; // Button connected to A0 pin
+
+// Relay pin definitions
+const int RELAY1_PIN = 2;
+const int RELAY2_PIN = 3;
+const int RELAY3_PIN = 4;
+
+// Initialize the LCD with the interface pins
+LiquidCrystal lcd(LCD_RS, LCD_ENABLE, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
+
+// Button value thresholds (based on analog values read)
+int buttonValues[5] = {50, 200, 400, 600, 800}; // Approximate thresholds for Right, Up, Down, Left, Select
+int currentSelection = 0; // 0: Start Machine, 1: Manual Start, 2: Settings
+char* menuItems[3] = {"1: Start Machine", "2: Manual Start", "3: Settings"};
+bool machineStarted = false; // Track if the machine is running
+bool inManualMode = false; // Track if we're in manual mode
+bool inSettingsMode = false; // Track if we're in the settings menu
+int currentRelaySelection = 0; // For selecting relays in manual mode
+char* relayItems[4] = {"Relay 1", "Relay 2", "Relay 3", "Back"}; // Added "Back" option
+
+// Settings variables
+int onTime = 5; // Default On Time in minutes
+int offTime = 3; // Default Off Time in minutes
+bool cyclicMode = false; // Default cyclic mode (false = OFF)
+char* settingItems[4] = {"Set On Time", "Set Off Time", "Cyclic Mode", "Back"}; // Added "Cyclic Mode"
+int currentSettingSelection = 0; // For settings menu navigation
+bool adjustOnTime = true; // True if adjusting On Time, false for Off Time
+
+// Button press state
+bool buttonPressed = false;
+bool adjustTimeMode = false; // Flag for adjusting time setting
+
+// Machine state
+bool machinePaused = false; // Track if the machine is paused
+unsigned long lastRunTime = 0; // Track when the machine was last running
+unsigned long runDuration = 0; // Track how long the machine has been running
+unsigned long onEndTime = 0; // Track when the on time ends
+unsigned long offEndTime = 0; // Track when the off time ends
+bool isOnTime = true; // Track whether the current period is On Time or Off Time
+bool wasOnTime = true; // Track whether it was On Time or Off Time before pausing
+bool relaysOn = false; // Track if relays are on
+
+// Company Name
+const char companyName[] = "AUMAUTOMATION ENGINEERING By MULTAN AHMED"; // Your company name
+const int scrollSpeed = 200; // Adjust this value to change the scrolling speed
+
+void setup() {
+  lcd.begin(16, 2);
+  pinMode(BACKLIGHT, OUTPUT);
+  digitalWrite(BACKLIGHT, HIGH);
+
+  // Set relay pins as output
+  pinMode(RELAY1_PIN, OUTPUT);
+  pinMode(RELAY2_PIN, OUTPUT);
+  pinMode(RELAY3_PIN, OUTPUT);
+
+  // Initialize relays to be off
+  digitalWrite(RELAY1_PIN, LOW);
+  digitalWrite(RELAY2_PIN, LOW);
+  digitalWrite(RELAY3_PIN, LOW);
+
+  // Load settings from EEPROM
+  onTime = EEPROM.read(0); // Stored On Time
+  offTime = EEPROM.read(1); // Stored Off Time
+  cyclicMode = EEPROM.read(2); // Stored Cyclic Mode (0 = OFF, 1 = ON)
+  if (onTime == 255) onTime = 5; // Default value if EEPROM is empty
+  if (offTime == 255) offTime = 3; // Default value if EEPROM is empty
+  if (cyclicMode == 255) cyclicMode = 0; // Default value if EEPROM is empty
+
+  // Display company name with scrolling effect
+  displayScrollingCompanyName();
+  delay(7000); // Show company name for 7 seconds
+
+  displayMenu(); // Show the menu
+}
+
+void loop() {
+  int buttonValue = analogRead(BUTTON_PIN); // Read the analog value from A0
+
+  if (adjustTimeMode) {
+    handleAdjustTime(buttonValue); // Handle time adjustment logic
+  } else if (inManualMode) {
+    handleManualMode(buttonValue); // Handle manual mode logic
+  } else if (inSettingsMode) {
+    handleSettingsMode(buttonValue); // Handle settings mode logic
+  } else {
+    handleMainMenu(buttonValue); // Handle main menu logic
+  }
+
+  // Manage machine state if it's running
+  if (machineStarted) {
+    unsigned long currentTime = millis();
+    unsigned long remainingTime;
+
+    if (machinePaused) {
+      // Machine is paused, display status
+      lcd.setCursor(0, 1);
+      lcd.print("Paused       ");
+      // Hold the relay state while paused
+      if (relaysOn) {
+        digitalWrite(RELAY1_PIN, HIGH);
+        digitalWrite(RELAY2_PIN, HIGH);
+        digitalWrite(RELAY3_PIN, HIGH);
+      } else {
+        digitalWrite(RELAY1_PIN, LOW);
+        digitalWrite(RELAY2_PIN, LOW);
+        digitalWrite(RELAY3_PIN, LOW);
+      }
+    } else {
+      if (isOnTime) {
+        remainingTime = (onEndTime - currentTime) / 1000; // Remaining time in seconds
+        if (remainingTime <= 0) {
+          // Time's up for On Time, switch to Off Time
+          digitalWrite(RELAY1_PIN, LOW);
+          digitalWrite(RELAY2_PIN, LOW);
+          digitalWrite(RELAY3_PIN, LOW);
+          relaysOn = false;
+          isOnTime = false;
+          offEndTime = millis() + offTime * 60000; // Set end time for Off Time
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print("Off Time     ");
+        } else {
+          // Display remaining On Time
+          lcd.setCursor(0, 0);
+          lcd.print("On Time: ");
+          displayTime(remainingTime);
+        }
+      } else {
+        remainingTime = (offEndTime - currentTime) / 1000; // Remaining time in seconds
+        if (remainingTime <= 0) {
+          // Time's up for Off Time, switch to On Time
+          digitalWrite(RELAY1_PIN, HIGH);
+          digitalWrite(RELAY2_PIN, HIGH);
+          digitalWrite(RELAY3_PIN, HIGH);
+          relaysOn = true;
+          isOnTime = true;
+          onEndTime = millis() + onTime * 60000; // Set end time for On Time
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print("On Time      ");
+        } else {
+          // Display remaining Off Time
+          lcd.setCursor(0, 0);
+          lcd.print("Off Time: ");
+          displayTime(remainingTime);
+        }
+      }
+    }
+  }
+
+  // Pause or resume the machine when the right button is pressed
+  if (buttonValue < buttonValues[0] && !buttonPressed) { // Right button pressed
+    buttonPressed = true;
+    if (machineStarted) {
+      machinePaused = !machinePaused;
+      if (machinePaused) {
+        // Record state before pausing
+        wasOnTime = isOnTime;
+        relaysOn = (digitalRead(RELAY1_PIN) == HIGH);
+        // Stop the countdown
+        runDuration = millis() - lastRunTime;
+        if (!cyclicMode) { // If not cyclic mode, stop relays
+          digitalWrite(RELAY1_PIN, LOW);
+          digitalWrite(RELAY2_PIN, LOW);
+          digitalWrite(RELAY3_PIN, LOW);
+        }
+      } else {
+        // Resume countdown
+        if (wasOnTime) {
+          onEndTime = millis() + onTime * 60000 - runDuration;
+        } else {
+          offEndTime = millis() + offTime * 60000 - runDuration;
+        }
+      }
+      lcd.clear();
+      lcd.print(machinePaused ? "Paused       " : "Running      ");
+      delay(2000); // Show pause/resume message for 2 seconds
+      lcd.clear();
+    }
+  }
+
+  if (buttonValue >= buttonValues[0]) {
+    buttonPressed = false; // Reset button pressed state when button is released
+  }
+
+  delay(200); // Small delay to avoid multiple presses
+}
+
+void displayScrollingCompanyName() {
+  int length = strlen(companyName);
+  for (int position = 0; position < length - 15; position++) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(companyName + position);
+    delay(scrollSpeed);
+  }
+}
+
+void handleMainMenu(int buttonValue) {
+  // Move the cursor based on button input
+  if (buttonValue < buttonValues[1]) { // Up button pressed
+    if (currentSelection > 0) currentSelection--;
+    delay(200); // Debounce delay
+  } else if (buttonValue < buttonValues[2]) { // Down button pressed
+    if (currentSelection < 2) currentSelection++;
+    delay(200); // Debounce delay
+  } else if (buttonValue < buttonValues[3]) { // Select button pressed
+    switch (currentSelection) {
+      case 0:
+        machineStarted = true;
+        inManualMode = false;
+        inSettingsMode = false;
+        lcd.clear();
+        lcd.print("Machine Start");
+        delay(1000); // Show message for 1 second
+        lcd.clear();
+        break;
+      case 1:
+        inManualMode = true;
+        inSettingsMode = false;
+        lcd.clear();
+        lcd.print("Manual Mode ");
+        delay(1000); // Show message for 1 second
+        lcd.clear();
+        break;
+      case 2:
+        inSettingsMode = true;
+        lcd.clear();
+        lcd.print("Settings     ");
+        delay(1000); // Show message for 1 second
+        lcd.clear();
+        break;
+    }
+  }
+
+  // Display menu
+  lcd.setCursor(0, 0);
+  lcd.print(menuItems[currentSelection]);
+}
+
+void handleManualMode(int buttonValue) {
+  // Move the cursor based on button input
+  if (buttonValue < buttonValues[1]) { // Up button pressed
+    if (currentRelaySelection > 0) currentRelaySelection--;
+    delay(200); // Debounce delay
+  } else if (buttonValue < buttonValues[2]) { // Down button pressed
+    if (currentRelaySelection < 3) currentRelaySelection++;
+    delay(200); // Debounce delay
+  } else if (buttonValue < buttonValues[3]) { // Select button pressed
+    if (currentRelaySelection == 3) {
+      inManualMode = false;
+      lcd.clear();
+      displayMenu();
+      return;
+    }
+    // Toggle relay based on current selection
+    int relayPin = RELAY1_PIN + currentRelaySelection;
+    digitalWrite(relayPin, !digitalRead(relayPin));
+    delay(200); // Debounce delay
+  }
+
+  // Display relay options
+  lcd.setCursor(0, 0);
+  lcd.print(relayItems[currentRelaySelection]);
+}
+
+void handleSettingsMode(int buttonValue) {
+  // Move the cursor based on button input
+  if (buttonValue < buttonValues[1]) { // Up button pressed
+    if (currentSettingSelection > 0) currentSettingSelection--;
+    delay(200); // Debounce delay
+  } else if (buttonValue < buttonValues[2]) { // Down button pressed
+    if (currentSettingSelection < 3) currentSettingSelection++;
+    delay(200); // Debounce delay
+  } else if (buttonValue < buttonValues[3]) { // Select button pressed
+    switch (currentSettingSelection) {
+      case 0:
+        adjustOnTime = true;
+        adjustTimeMode = true;
+        lcd.clear();
+        lcd.print("Set On Time ");
+        break;
+      case 1:
+        adjustOnTime = false;
+        adjustTimeMode = true;
+        lcd.clear();
+        lcd.print("Set Off Time");
+        break;
+      case 2:
+        cyclicMode = !cyclicMode;
+        EEPROM.write(2, cyclicMode); // Save to EEPROM
+        lcd.clear();
+        lcd.print("Cyclic Mode ");
+        lcd.setCursor(0, 1);
+        lcd.print(cyclicMode ? "ON" : "OFF");
+        delay(1000); // Show message for 1 second
+        lcd.clear();
+        break;
+      case 3:
+        adjustTimeMode = false;
+        inSettingsMode = false;
+        lcd.clear();
+        displayMenu();
+        break;
+    }
+    delay(1000); // Show selected option for 1 second
+  }
+
+  // Display settings options
+  lcd.setCursor(0, 0);
+  lcd.print(settingItems[currentSettingSelection]);
+}
+
+void handleAdjustTime(int buttonValue) {
+  if (buttonValue < buttonValues[1]) { // Up button pressed
+    if (adjustOnTime) {
+      onTime++;
+      if (onTime > 60) onTime = 60; // Limit On Time to 60 minutes
+    } else {
+      offTime++;
+      if (offTime > 60) offTime = 60; // Limit Off Time to 60 minutes
+    }
+    delay(200); // Debounce delay
+  } else if (buttonValue < buttonValues[2]) { // Down button pressed
+    if (adjustOnTime) {
+      onTime--;
+      if (onTime < 1) onTime = 1; // Limit On Time to 1 minute
+    } else {
+      offTime--;
+      if (offTime < 1) offTime = 1; // Limit Off Time to 1 minute
+    }
+    delay(200); // Debounce delay
+  } else if (buttonValue < buttonValues[3]) { // Select button pressed
+    if (adjustOnTime) {
+      EEPROM.write(0, onTime); // Save On Time to EEPROM
+    } else {
+      EEPROM.write(1, offTime); // Save Off Time to EEPROM
+    }
+    adjustTimeMode = false;
+    lcd.clear();
+    displayMenu();
+    return;
+  }
+
+  // Display current time setting
+  lcd.setCursor(0, 1);
+  if (adjustOnTime) {
+    lcd.print("On Time: ");
+    lcd.print(onTime);
+    lcd.print(" min");
+  } else {
+    lcd.print("Off Time: ");
+    lcd.print(offTime);
+    lcd.print(" min");
+  }
+}
+
+void displayTime(unsigned long seconds) {
+  unsigned long minutes = seconds / 60;
+  seconds = seconds % 60;
+  lcd.print(minutes);
+  lcd.print("m ");
+  lcd.print(seconds);
+  lcd.print("s");
+}
