@@ -3,3 +3,10 @@ Feature 1: When the "Start" option is selected, Relay 1 turns on immediately, an
 Feature 2: Simultaneously, the countdown for Relay 2's delay (e.g., R2 will ON at 1.0, 0.9...) is displayed on the second row.
 
 Feature 3: After the Relay 2 delay completes, Relay 2 turns on for the same duration as Relay 1, and the display switches to show the countdown for Relay 2 on the first row.
+
+R1 Turns ON Immediately and starts its timer (setR1Time).
+Delay Timer Starts Simultaneously with R1.
+R1 Turns OFF After Its Timer Completes.
+R2 Remains OFF until the delay timer completes.
+When Delay Completes, R2 Turns ON for the same duration as R1.
+After R2 Completes, Both Relays Are OFF and the cycle is complete.
